@@ -121,3 +121,33 @@ Market-insight-bot/
 ### 11. `requirements.txt`
     *   **功能**: 列出项目运行所需的所有Python第三方库及其版本。
     *   **依赖**: 无。
+
+
+## 启动流程
+
+```mermaid
+1. 加载配置 (config/settings.py)
+   ↓
+2. 初始化日志系统 (utils/__init__.py)
+   ↓
+3. 初始化通信模块 (communication/zmq_manager.py)
+   ↓
+4. 初始化数据模块
+   ├─→ 初始化新闻数据模块 (data_modules/news/fetcher.py, processor.py)
+   ├─→ 初始化价格行为数据模块 (data_modules/price_action/fetcher.py, processor.py)
+   └─→ 初始化订单流数据模块 (data_modules/order_flow/fetcher.py, processor.py)
+   ↓
+5. 初始化AI分析模块
+   ├─→ 初始化新闻分析器 (ai_analyzers/news_analyzer.py)
+   ├─→ 初始化价格行为分析器 (ai_analyzers/price_action_analyzer.py)
+   └─→ 初始化订单流分析器 (ai_analyzers/order_flow_analyzer.py)
+   ↓
+6. 初始化决策引擎
+   ├─→ 初始化仓位控制AI (decision_engine/position_control_ai.py)
+   └─→ 初始化交易执行模块 (decision_engine/trader.py)
+   ↓
+7. 初始化工作流协调器 (workflow/main_orchestrator.py)
+   ↓
+8. 初始化调度器并启动定时任务 (agent/scheduler.py)
+
+```
