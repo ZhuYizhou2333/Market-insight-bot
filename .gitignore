@@ -194,3 +194,9 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# config
+#  This file is used to store configuration settings for the project.
+#  It is recommended to not include it in version control as it may contain sensitive information
+#  or local settings that are not relevant to other developers.
+config/settings.py

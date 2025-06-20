@@ -1,1 +1,0 @@
-# Project settings and configurations
