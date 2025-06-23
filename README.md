@@ -10,12 +10,16 @@ Market-insight-bot/
 │   │   ├── fetcher.py          # 新闻数据获取器
 │   │   └── processor.py        # 新闻数据处理器
 │   │   └── __init__.py
+|   ├── market_data/
+|   |   ├── fetcher.py          # 市场数据获取器，从交易所API获取逐笔成交、逐笔委托等数据，并通过ZeroMQ分发
+|   |   └── processor.py        # 市场数据处理器，处理逐笔成交、逐笔委托等数据为K线数据等，并通过ZeroMQ分发
+|   |   └── __init__.py
 │   ├── price_action/           # 价格行为数据处理
-│   │   ├── fetcher.py          # 价格行为数据获取器
+│   │   ├── fetcher.py          # 价格行为数据获取器，从ZeroMQ获取K线、成交量等数据
 │   │   └── processor.py        # 价格行为数据处理器
 │   │   └── __init__.py
 │   ├── order_flow/             # 订单流数据处理
-│   │   ├── fetcher.py          # 订单流数据获取器
+│   │   ├── fetcher.py          # 订单流数据获取器，从ZeroMQ获取订单流数据
 │   │   └── processor.py        # 订单流数据处理器
 │   │   └── __init__.py
 │   └── __init__.py
