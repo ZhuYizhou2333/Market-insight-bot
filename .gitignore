@@ -200,3 +200,7 @@ cython_debug/
 #  It is recommended to not include it in version control as it may contain sensitive information
 #  or local settings that are not relevant to other developers.
 config/settings.py
+
+# telethon
+
+sessions/
