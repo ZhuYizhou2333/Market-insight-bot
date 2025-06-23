@@ -7,3 +7,5 @@
 # tensorflow / pytorch (if using deep learning)
 # requests (for fetching data)
 # schedule (for scheduling tasks)
+telethon
+pyzmq
