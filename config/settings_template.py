@@ -11,5 +11,20 @@ TELEGRAM_CONFIG = {
 # ZeroMQ Configuration
 ZMQ_CONFIG = {
     "NEWS_PUBLISHER_ADDRESS": "tcp://127.0.0.1:5555",
-    "NEWS_TOPIC": "raw_news"
+    "NEWS_TOPIC": "raw_news",
 }
+
+# Binance USD-M Futures Fetcher Configuration
+BINANCE_USD_M_FUTURES_CONFIG = {
+    "SYMBOLS": ["btcusdt", "ethusdt"],  # Add target symbols here
+    "CHANNELS": ["trade", "depth"],  # trade, depth, kline_1m, etc.
+}
+
+# ZeroMQ Configuration for Market Data
+ZMQ_CONFIG.update(
+    {
+        "MARKET_DATA_PUBLISHER_ADDRESS": "tcp://127.0.0.1:5556",
+        "MARKET_DATA_TOPIC_TRADE": "binance_usdm_trade",
+        "MARKET_DATA_TOPIC_DEPTH": "binance_usdm_depth",
+    }
+)

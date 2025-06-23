@@ -9,3 +9,4 @@
 # schedule (for scheduling tasks)
 telethon
 pyzmq
+unicorn-binance-websocket-api
