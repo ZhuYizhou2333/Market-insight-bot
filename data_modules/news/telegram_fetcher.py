@@ -45,9 +45,7 @@ class TelegramFetcher:
         """
         try:
             message_data = {
-                "channel": event.chat.username
-                if hasattr(event.chat, "username")
-                else event.chat.title,
+                "channel": event.chat.title,
                 "message_id": event.message.id,
                 "text": event.message.text,
                 "date": event.message.date.isoformat(),
