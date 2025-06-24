@@ -17,7 +17,7 @@ ZMQ_CONFIG = {
 # Binance USD-M Futures Fetcher Configuration
 BINANCE_USD_M_FUTURES_CONFIG = {
     "SYMBOLS": ["btcusdt", "ethusdt"],  # Add target symbols here
-    "CHANNELS": ["trade", "depth"],  # trade, depth, kline_1m, etc.
+    "CHANNELS": ["aggTrade", "depth20"],  # trade, depth, kline_1m, etc.
 }
 
 # ZeroMQ Configuration for Market Data

@@ -67,7 +67,7 @@ class BinanceUSDMarginFetcher:
                     logger.warning(f"Symbol not found in stream data: {data}")
                     continue
 
-                if event_type == "trade":
+                if event_type == "aggTrade":
                     topic = f"{self.trade_topic}.{symbol}"
                     self.zmq_manager.publish_message(self.publisher, topic, data)
                 elif event_type == "depthUpdate":
@@ -93,7 +93,7 @@ class BinanceUSDMarginFetcher:
         处理来自 WebSocket 管理器的信号，用于日志记录和监控。
         """
         stream_label = self.ubwa.get_stream_label(stream_id=stream_id) or "manager"
-        logger.info(
+        logger.success(
             f"Received stream signal for '{stream_label}': "
             f"Type={signal_type}, Data={data_record}, Error={error_msg}"
         )
@@ -114,6 +114,7 @@ class BinanceUSDMarginFetcher:
             markets=self.symbols,
             process_asyncio_queue=self._process_stream_data,
             stream_label="usd_m_futures_data",
+            ping_interval=7,  # 设置心跳间隔为7秒
         )
 
         # 保持运行并监控状态
