@@ -1,11 +1,79 @@
 import threading
-from typing import Dict
+import time
+from typing import Any, Dict
 
 import zmq
 
 from communication.zmq_manager import ZMQManager
 from config.settings import BINANCE_USD_M_FUTURES_CONFIG, ZMQ_CONFIG
 from utils.logger import logger
+
+
+class MonitoredCache:
+    """自定义带监控的缓存，支持过期和日志记录，由独立线程监控过期"""
+
+    def __init__(self, maxsize: int, ttl: float):
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self._data = {}  # key: (value, timestamp)
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_expiry, daemon=True
+        )
+        self._monitor_thread.start()
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        with self._lock:
+            old = self._data.get(key)
+            now = time.time()
+            if old is not None and old[0] == value:
+                self._data[key] = (value, now)
+                return
+            if old is None:
+                logger.info(f"缓存新增 - 键: {key}, 值: {value}")
+            self._data[key] = (value, now)
+            # 控制最大容量
+            if len(self._data) > self.maxsize:
+                # 简单淘汰最早的
+                oldest_key = min(self._data.items(), key=lambda x: x[1][1])[0]
+                self.__delitem__(oldest_key)
+
+    def __getitem__(self, key: Any) -> Any:
+        with self._lock:
+            return self._data[key][0]
+
+    def get(self, key: Any):
+        with self._lock:
+            item = self._data.get(key)
+            return item[0] if item else None
+
+    def __delitem__(self, key: Any) -> None:
+        with self._lock:
+            if key in self._data:
+                value = self._data[key][0]
+                logger.info(f"缓存过期 - 键: {key}, 值: {value}")
+                del self._data[key]
+
+    def __contains__(self, key: Any) -> bool:
+        with self._lock:
+            return key in self._data
+
+    def stop(self):
+        self._stop_event.set()
+        self._monitor_thread.join()
+
+    def _monitor_expiry(self):
+        while not self._stop_event.is_set():
+            now = time.time()
+            expired = []
+            with self._lock:
+                for key, (value, ts) in list(self._data.items()):
+                    if now - ts > self.ttl:
+                        expired.append(key)
+            for key in expired:
+                self.__delitem__(key)
+            time.sleep(1)
 
 
 class MarketDataProcessor:
@@ -26,23 +94,29 @@ class MarketDataProcessor:
         self.depth_topic: str = ZMQ_CONFIG["MARKET_DATA_TOPIC_DEPTH"]
         self._stop_event = threading.Event()
         self._thread = None
+        self.cache = MonitoredCache(
+            maxsize=1000,  # Adjust as needed
+            ttl=60 * 5,  # 5 minutes TTL
+        )
         logger.info("MarketDataProcessor initialized.")
 
     def _process_trade_data(self, data: Dict):
         """
-        Processes incoming trade data.
-        (Placeholder for future implementation)
+        Processes incoming trade data with timestamp checking.
         """
-        logger.info(f"Received trade data: {data}")
-        # TODO: Implement trade data processing logic (e.g., create bars, calculate volume)
+        try:
+            self.cache[data["data"]["e"]] = data["data"]
+        except Exception as e:
+            logger.error(f"Error processing trade data: {e}", exc_info=True)
 
     def _process_depth_data(self, data: Dict):
         """
-        Processes incoming order book depth data.
-        (Placeholder for future implementation)
+        Processes incoming order book depth data with timestamp checking.
         """
-        logger.info(f"Received depth data: {data}")
-        # TODO: Implement order book processing logic (e.g., calculate VWAP, detect imbalances)
+        try:
+            self.cache[data["data"]["e"]] = data["data"]
+        except Exception as e:
+            logger.error(f"Error processing depth data: {e}", exc_info=True)
 
     def _listen(self):
         """
@@ -63,7 +137,6 @@ class MarketDataProcessor:
         logger.success(f"Subscribed to topics: {topics_to_subscribe}")
 
         while not self._stop_event.is_set():
-            logger.info("MarketDataProcessor listening for messages...")
             try:
                 # Poll with a timeout to remain responsive to the stop event
                 if subscriber.poll(timeout=1000):  # 1-second timeout
@@ -100,4 +173,6 @@ class MarketDataProcessor:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join()
+        if hasattr(self, "cache") and hasattr(self.cache, "stop"):
+            self.cache.stop()
         logger.success("MarketDataProcessor listener stopped.")
