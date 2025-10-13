@@ -96,7 +96,7 @@ class MarketDataProcessor:
         self._thread = None
         self.cache = MonitoredCache(
             maxsize=1000,  # Adjust as needed
-            ttl=60 * 5,  # 5 minutes TTL
+            ttl=5,  # 5 seconds TTL
         )
         logger.info("MarketDataProcessor initialized.")
 
@@ -106,6 +106,8 @@ class MarketDataProcessor:
         """
         try:
             self.cache[data["data"]["e"]] = data["data"]
+            with open("logs/trade_data.log", "w") as f:
+                f.write(f"{data['data']['e']}: {data['data']}\n")
         except Exception as e:
             logger.error(f"Error processing trade data: {e}", exc_info=True)
 
@@ -115,6 +117,8 @@ class MarketDataProcessor:
         """
         try:
             self.cache[data["data"]["e"]] = data["data"]
+            with open("logs/depth_data.log", "w") as f:
+                f.write(f"{data['data']['e']}: {data['data']}\n")
         except Exception as e:
             logger.error(f"Error processing depth data: {e}", exc_info=True)
 
