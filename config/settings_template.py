@@ -5,6 +5,11 @@ TELEGRAM_CONFIG = {
     "API_HASH": "YOUR_API_HASH",  # Please replace with your actual API Hash
     "SESSION_NAME": "telegram_session",
     "CHANNELS": ["some_news_channel"],  # Add target channel usernames here
+        "GROUPS": [
+        # Add private group invite hashes or group IDs here
+        # For private groups with invite links like t.me/+xxx, add the hash after '+'
+        # Or add the numeric group ID after you join
+    ],  # Add target group identifiers here
     "SESSION_STORAGE_PATH": "sessions/",
 }
 

@@ -27,14 +27,16 @@ class TelegramFetcher:
             TELEGRAM_CONFIG["API_HASH"],
         )
         self.channels = TELEGRAM_CONFIG["CHANNELS"]
+        self.groups = TELEGRAM_CONFIG.get("GROUPS", [])
+        self.all_chats = self.channels + self.groups
         self.zmq_publisher = zmq_manager.get_publisher(
             ZMQ_CONFIG["NEWS_PUBLISHER_ADDRESS"]
         )
         self.news_topic = ZMQ_CONFIG["NEWS_TOPIC"].encode("utf-8")
+        self.chat_entities = []  # Store resolved chat entities
 
-        # Register the event handler for new messages
-        self.client.on(events.NewMessage(chats=self.channels))(self.handle_new_message)
-        logger.info("TelegramFetcher initialized and event handler registered.")
+        # Event handler will be registered in start() after client is connected
+        logger.info("TelegramFetcher initialized.")
 
     async def handle_new_message(self, event: events.NewMessage.Event):
         """
@@ -65,11 +67,29 @@ class TelegramFetcher:
 
     async def start(self):
         """
-        Starts the Telegram client.
+        Starts the Telegram client and resolves chat entities.
         """
         logger.info("Starting Telegram client...")
         await self.client.start()
         logger.info("Telegram client started.")
+
+        # Resolve all chat entities (channels and groups)
+        for chat in self.all_chats:
+            try:
+                entity = await self.client.get_entity(chat)
+                self.chat_entities.append(entity)
+                chat_name = getattr(entity, 'title', None) or getattr(entity, 'username', str(entity.id))
+                logger.info(f"Successfully resolved chat: {chat_name} (ID: {entity.id})")
+            except Exception as e:
+                logger.error(f"Failed to resolve chat '{chat}': {e}")
+
+        # Register the event handler with resolved entities
+        if self.chat_entities:
+            self.client.on(events.NewMessage(chats=self.chat_entities))(self.handle_new_message)
+            logger.info(f"Event handler registered for {len(self.chat_entities)} chats.")
+        else:
+            logger.warning("No chat entities resolved. Event handler not registered.")
+
         await self.client.run_until_disconnected()
 
     async def stop(self):
