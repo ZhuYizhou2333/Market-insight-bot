@@ -35,7 +35,29 @@ async def main():
 
         print(f"Type: {entity_type}")
         print(f"Title: {entity_title}")
-        print(f"ID: {entity_id}")
+        print(f"ID (raw): {entity_id}")
+
+        # Determine if it's a channel or megagroup
+        # Megagroups are Channels with megagroup=True
+        is_megagroup = (entity_type == 'Channel' and
+                       hasattr(entity, 'megagroup') and
+                       entity.megagroup)
+
+        # For megagroups, we need to convert the ID to the proper format
+        # Telethon uses the format: -100 + channel_id for supergroups
+        if is_megagroup and entity_id > 0:
+            config_id = -1000000000000 - entity_id
+        else:
+            config_id = entity_id
+
+        config_type = "GROUPS" if is_megagroup or entity_id < 0 else "CHANNELS"
+
+        # Show the correct format for config
+        if hasattr(entity, "username") and entity.username:
+            print(f"Config Value (recommended): '{entity.username}'  # Use in {config_type}")
+            print(f"Config Value (alternative): {config_id}  # Also works in {config_type}")
+        else:
+            print(f"Config Value: {config_id}  # Use in {config_type} (no username, must use ID)")
 
         # For channels/groups, show username if available
         if hasattr(entity, "username") and entity.username:
