@@ -76,7 +76,9 @@ class TelegramFetcher:
         # Resolve all chat entities (channels and groups)
         for chat in self.all_chats:
             try:
-                entity = await self.client.get_entity(chat)
+                # Convert to int if it's a numeric string
+                chat_id = int(chat) if isinstance(chat, str) and chat.isdigit() else chat
+                entity = await self.client.get_entity(chat_id)
                 self.chat_entities.append(entity)
                 chat_name = getattr(entity, 'title', None) or getattr(entity, 'username', str(entity.id))
                 logger.info(f"Successfully resolved chat: {chat_name} (ID: {entity.id})")
