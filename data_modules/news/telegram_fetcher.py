@@ -46,11 +46,33 @@ class TelegramFetcher:
             event (events.NewMessage.Event): The new message event.
         """
         try:
+            # Determine message source type (channel vs group)
+            source_type = "unknown"
+            chat = event.chat
+            try:
+                # Telethon Channel: broadcast=True for channels, megagroup=True for groups
+                from telethon.tl.types import Channel, Chat
+
+                if isinstance(chat, Channel):
+                    if getattr(chat, "broadcast", False):
+                        source_type = "channel"
+                    elif getattr(chat, "megagroup", False):
+                        source_type = "group"
+                    else:
+                        # Fallback: treat as channel if not clearly a megagroup
+                        source_type = "channel"
+                elif isinstance(chat, Chat):
+                    source_type = "group"
+            except Exception:
+                # Best-effort fallback
+                source_type = "unknown"
+
             message_data = {
-                "channel": event.chat.title,
+                "channel": getattr(chat, "title", None) or getattr(chat, "username", "Unknown"),
                 "message_id": event.message.id,
                 "text": event.message.text,
                 "date": event.message.date.isoformat(),
+                "message_type": source_type,  # one of: channel, group, unknown
             }
             message_json = json.dumps(message_data)
 

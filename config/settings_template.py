@@ -33,3 +33,15 @@ ZMQ_CONFIG.update(
         "MARKET_DATA_TOPIC_DEPTH": "binance_usdm_depth",
     }
 )
+
+# AI Analyzer Configuration
+AI_ANALYZER_CONFIG = {
+    "MODEL": "qwen-plus-latest",  # 使用的模型
+    "MESSAGE_BUFFER_SIZE": 1000,  # 消息缓冲区大小
+    "ANALYSIS_INTERVAL": 1000,  # 每 N 条消息进行一次分析（用于波动率等）
+    "SUMMARY_MESSAGE_COUNT": 100,  # 摘要使用的消息数量
+    "VOLATILITY_MESSAGE_COUNT": 500,  # 波动率分析使用的消息数量
+    # 按消息类型的摘要间隔：频道（新闻）每 50 条、社群（群组）每 1000 条
+    "SUMMARY_INTERVAL_CHANNEL": 50,
+    "SUMMARY_INTERVAL_GROUP": 1000,
+}

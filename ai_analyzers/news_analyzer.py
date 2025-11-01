@@ -26,6 +26,10 @@ class NewsAnalyzer:
         model: str = "qwen-plus-latest",
         message_buffer_size: int = 1000,
         analysis_interval: int = 1000,
+        summary_interval_channel: int = 50,
+        summary_interval_group: int = 1000,
+        summary_message_count: int = 100,
+        volatility_message_count: int = 500,
     ):
         """
         初始化新闻分析器
@@ -34,7 +38,11 @@ class NewsAnalyzer:
             api_key: 阿里云 DashScope API Key，默认从环境变量读取
             model: 使用的模型名称
             message_buffer_size: 消息缓冲区大小
-            analysis_interval: 分析间隔（消息数量）
+            analysis_interval: 分析间隔（消息数量），用于波动率等周期性分析
+            summary_interval_channel: 频道（新闻）摘要间隔
+            summary_interval_group: 社群（群组）摘要间隔
+            summary_message_count: 摘要时采样的最近消息数量
+            volatility_message_count: 波动率分析时采样的最近消息数量
         """
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
         if not self.api_key:
@@ -45,11 +53,20 @@ class NewsAnalyzer:
         self.model = model
         self.message_buffer_size = message_buffer_size
         self.analysis_interval = analysis_interval
+        self.summary_interval_channel = summary_interval_channel
+        self.summary_interval_group = summary_interval_group
+        self.summary_message_count = summary_message_count
+        self.volatility_message_count = volatility_message_count
 
         # 消息缓冲区
         self.message_buffer = deque(maxlen=message_buffer_size)
         self.message_count = 0
         self.last_analysis_count = 0
+        # 按类型计数与上一次摘要位置
+        self.channel_message_count = 0
+        self.group_message_count = 0
+        self.last_channel_summary_count = 0
+        self.last_group_summary_count = 0
 
         logger.info(f"NewsAnalyzer initialized with model: {model}")
 
@@ -63,7 +80,41 @@ class NewsAnalyzer:
         self.message_buffer.append(message_data)
         self.message_count += 1
 
-        # 检查是否需要进行分析
+        # 识别消息类型
+        msg_type = (message_data.get("message_type") or "unknown").lower()
+        if msg_type == "channel":
+            self.channel_message_count += 1
+            # 达到频道摘要间隔则生成频道摘要
+            if (
+                self.channel_message_count - self.last_channel_summary_count
+                >= self.summary_interval_channel
+            ):
+                summary = self.summarize_recent_messages(
+                    num_messages=self.summary_message_count, message_type="channel"
+                )
+                if summary:
+                    logger.success(f"[Channel Summary] {summary}")
+                else:
+                    logger.warning("[Channel Summary] Failed to generate summary")
+                self.last_channel_summary_count = self.channel_message_count
+
+        elif msg_type == "group":
+            self.group_message_count += 1
+            # 达到社群摘要间隔则生成社群摘要
+            if (
+                self.group_message_count - self.last_group_summary_count
+                >= self.summary_interval_group
+            ):
+                summary = self.summarize_recent_messages(
+                    num_messages=self.summary_message_count, message_type="group"
+                )
+                if summary:
+                    logger.success(f"[Group Summary] {summary}")
+                else:
+                    logger.warning("[Group Summary] Failed to generate summary")
+                self.last_group_summary_count = self.group_message_count
+
+        # 周期性进行波动率分析
         if self.message_count - self.last_analysis_count >= self.analysis_interval:
             self.analyze_messages()
             self.last_analysis_count = self.message_count
@@ -104,7 +155,9 @@ class NewsAnalyzer:
             logger.error(f"Error calling Qwen API: {e}")
             return None
 
-    def summarize_recent_messages(self, num_messages: int = 100) -> Optional[str]:
+    def summarize_recent_messages(
+        self, num_messages: int = 100, message_type: Optional[str] = None
+    ) -> Optional[str]:
         """
         对最近 N 条消息进行摘要
 
@@ -118,8 +171,14 @@ class NewsAnalyzer:
             logger.warning("No messages in buffer to summarize")
             return None
 
-        # 获取最近的 N 条消息
-        recent_messages = list(self.message_buffer)[-num_messages:]
+        # 获取最近的 N 条消息；如果指定了类型，则按类型过滤
+        if message_type:
+            filtered = [
+                m for m in self.message_buffer if (m.get("message_type") or "").lower() == message_type
+            ]
+            recent_messages = filtered[-num_messages:]
+        else:
+            recent_messages = list(self.message_buffer)[-num_messages:]
 
         # 构建消息文本
         message_texts = []
@@ -132,20 +191,25 @@ class NewsAnalyzer:
 
         combined_text = "\n\n".join(message_texts)
 
-        system_prompt = """你是一个加密货币市场分析专家。你的任务是分析 Telegram 频道的消息，提供简洁准确的摘要。
-摘要应包含：
-1. 主要讨论的币种和项目
-2. 重要的市场事件或新闻
-3. 社区关注的热点话题
-4. 重要的价格走势或技术分析观点
+        # ...existing code...
+        system_prompt = """你是加密货币市场事件与价格影响分析助手。仅基于给定的 Telegram 文本，识别正在发生的可验证事件，并用克制的叙事体总结其对价格的影响。
 
-请用中文回答，保持专业和客观。"""
+必须遵守：
+- 只使用消息中的信息；不得补充常识或外部新闻；不得编造任何数字、来源或引言。
+- 涨跌幅/价格/时间窗口如未在文本出现，写“未见明确数值/时间”。
+- 原因不确定时写“原因不明/待观察”。如作推测，需明确标注“可能因……（据消息所述/多条提及）”。
+- 避免口语化与煽动性词汇，避免表情符号与夸张修辞。
 
-        user_prompt = f"""请对以下 {len(recent_messages)} 条加密货币相关的 Telegram 消息进行摘要分析：
+输出方式（叙事体，非结构化）：
+- 每个热点用2-3句客观陈述：先概述事件，再给出价格影响（若有），最后说明可能原因与不确定性；必要时穿插一条原文引述。
+- 若无明显热点，仅输出：暂无明显热点。"""
+# ...existing code...
+        user_prompt = f"""请分析以下 {len(recent_messages)} 条消息，提炼正在发生的热点事件及其对价格的影响。只依据消息内容作答；无法判断的项请直述（如“未见明确数值”“原因不明/待观察”）。输出使用简洁叙事体，不要使用列表或小标题。
 
 {combined_text}
 
-请提供一个简洁的摘要（200-300字）。"""
+请直接给出叙述；无热点则仅输出“暂无明显热点”。"""
+# ...existing code...
 
         summary = self._call_qwen_api(user_prompt, system_prompt)
         return summary
@@ -241,38 +305,42 @@ class NewsAnalyzer:
             f"(buffer size: {len(self.message_buffer)})"
         )
 
-        # 1. 生成消息摘要
-        summary = self.summarize_recent_messages(num_messages=100)
-        if summary:
-            logger.success(f"Message Summary:\n{summary}")
-        else:
-            logger.warning("Failed to generate summary")
-
-        # 2. 分析市场波动率
-        volatility_result = self.analyze_market_volatility(num_messages=500)
+        # 分析市场波动率（摘要改为按类型独立触发，但在邮件中汇总展示）
+        volatility_result = self.analyze_market_volatility(
+            num_messages=self.volatility_message_count
+        )
 
         if volatility_result:
             logger.info(f"Volatility Analysis Result: {json.dumps(volatility_result, ensure_ascii=False, indent=2)}")
 
-            # 3. 如果波动率或活跃度上升，发送邮件
+            # 频道与社群分别生成摘要，用于统一邮件内容
+            channel_summary = self.summarize_recent_messages(
+                num_messages=self.summary_message_count, message_type="channel"
+            )
+            group_summary = self.summarize_recent_messages(
+                num_messages=self.summary_message_count, message_type="group"
+            )
+
+            # 3. 如果波动率或活跃度上升，发送邮件（包含新闻与社群两部分摘要）
             if volatility_result.get("volatility_increased") or volatility_result.get(
                 "activity_increased"
             ):
-                self._send_alert_email(volatility_result, summary)
+                self._send_alert_email(volatility_result, channel_summary, group_summary)
             else:
                 logger.info("No significant market volatility or activity increase detected")
         else:
             logger.warning("Failed to analyze market volatility")
 
     def _send_alert_email(
-        self, volatility_result: Dict, summary: Optional[str]
+        self, volatility_result: Dict, channel_summary: Optional[str], group_summary: Optional[str]
     ) -> None:
         """
         发送市场波动警报邮件
 
         Args:
             volatility_result: 波动率分析结果
-            summary: 消息摘要
+            channel_summary: 新闻（频道）摘要
+            group_summary: 社群（群组）摘要
         """
         # 构建邮件内容
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -327,9 +395,15 @@ class NewsAnalyzer:
 
 ---
 
-## 📰 最近消息摘要
+## 📰 新闻摘要（频道）
 
-{summary or '暂无摘要'}
+{channel_summary or '暂无摘要'}
+
+---
+
+## 👥 社群摘要（群组）
+
+{group_summary or '暂无摘要'}
 
 ---
 
@@ -360,6 +434,12 @@ class NewsAnalyzer:
             "buffer_size": len(self.message_buffer),
             "last_analysis_count": self.last_analysis_count,
             "next_analysis_at": self.last_analysis_count + self.analysis_interval,
+            "channel_total_messages": self.channel_message_count,
+            "group_total_messages": self.group_message_count,
+            "next_channel_summary_at": self.last_channel_summary_count
+            + self.summary_interval_channel,
+            "next_group_summary_at": self.last_group_summary_count
+            + self.summary_interval_group,
         }
 
 

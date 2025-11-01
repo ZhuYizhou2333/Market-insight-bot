@@ -25,7 +25,7 @@ def load_email_config():
     return {
         "sender": os.getenv("EMAIL_SENDER", "your_email@qq.com"),
         "password": os.getenv("EMAIL_PASSWORD", "your_smtp_password"), 
-        "receiver": os.getenv("EMAIL_RECEIVER", "your_email@qq.com"),
+        "receiver": "2135378845@qq.com,2373034690@qq.com,huxian518@gmail.com,zzjianhust@gmail.com",
         "smtp_server": os.getenv("SMTP_SERVER", "smtp.qq.com"),
         "smtp_port": int(os.getenv("SMTP_PORT", "587")),
         "use_tls": os.getenv("USE_TLS", "True").lower() == "true",

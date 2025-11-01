@@ -33,6 +33,18 @@ class NewsProcessor:
                 model=AI_ANALYZER_CONFIG["MODEL"],
                 message_buffer_size=AI_ANALYZER_CONFIG["MESSAGE_BUFFER_SIZE"],
                 analysis_interval=AI_ANALYZER_CONFIG["ANALYSIS_INTERVAL"],
+                summary_interval_channel=AI_ANALYZER_CONFIG.get(
+                    "SUMMARY_INTERVAL_CHANNEL", 50
+                ),
+                summary_interval_group=AI_ANALYZER_CONFIG.get(
+                    "SUMMARY_INTERVAL_GROUP", 1000
+                ),
+                summary_message_count=AI_ANALYZER_CONFIG.get(
+                    "SUMMARY_MESSAGE_COUNT", 100
+                ),
+                volatility_message_count=AI_ANALYZER_CONFIG.get(
+                    "VOLATILITY_MESSAGE_COUNT", 500
+                ),
             )
             logger.info("NewsProcessor initialized with AI analyzer.")
         except Exception as e:
@@ -114,6 +126,9 @@ class NewsProcessor:
         # 分析器会自动在达到分析间隔时进行分析
         if self.news_analyzer:
             try:
+                # 确保携带消息类型（频道/社群），以便按类型进行摘要
+                if "message_type" not in news_data:
+                    news_data["message_type"] = "channel"  # 默认当作频道消息
                 self.news_analyzer.add_message(news_data)
 
                 # 每 100 条消息打印一次统计信息
@@ -122,7 +137,9 @@ class NewsProcessor:
                     logger.info(
                         f"AI Analyzer Stats - Total: {stats['total_messages']}, "
                         f"Buffer: {stats['buffer_size']}, "
-                        f"Next analysis at: {stats['next_analysis_at']}"
+                        f"Next analysis at: {stats['next_analysis_at']}, "
+                        f"Channel msgs: {stats.get('channel_total_messages', 0)} -> next summary: {stats.get('next_channel_summary_at', '-')}, "
+                        f"Group msgs: {stats.get('group_total_messages', 0)} -> next summary: {stats.get('next_group_summary_at', '-')}"
                     )
             except Exception as e:
                 logger.error(f"Error adding message to AI analyzer: {e}")
