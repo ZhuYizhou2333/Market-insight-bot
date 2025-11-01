@@ -94,30 +94,87 @@ class BinanceUSDMarginFetcher:
     async def _subscribe_streams(self):
         """
         订阅所有配置的交易对和频道。
+        使用 futures_multiplex_socket 统一订阅所有流。
         """
-        tasks = []
-
-        # 根据配置的 channels 订阅相应的流
+        # 构建所有流的名称列表
+        streams = []
         for symbol in self.symbols:
             symbol_lower = symbol.lower()
-
             for channel in self.channels:
                 if channel == "aggTrade":
-                    # 订阅聚合交易流
-                    logger.info(f"Subscribing to aggTrade stream for {symbol}")
-                    ts = self.bsm.aggtrade_futures_socket(symbol_lower)
-                    stream_name = f"{symbol}/aggTrade"
-                    task = asyncio.create_task(self._handle_socket(ts, self._process_aggTrade_message, stream_name))
-                    tasks.append(task)
+                    streams.append(f"{symbol_lower}@aggTrade")
                 elif channel.startswith("depth"):
-                    # 订阅深度更新流（支持 depth, depth5, depth10, depth20）
-                    logger.info(f"Subscribing to {channel} stream for {symbol}")
-                    ds = self.bsm.depth_socket(symbol_lower)
-                    stream_name = f"{symbol}/{channel}"
-                    task = asyncio.create_task(self._handle_socket(ds, self._process_depth_message, stream_name))
-                    tasks.append(task)
+                    # depth, depth5, depth10, depth20
+                    if channel == "depth":
+                        streams.append(f"{symbol_lower}@depth")
+                    else:
+                        streams.append(f"{symbol_lower}@{channel}")
 
-        self._tasks = tasks
+        logger.info(f"Subscribing to futures streams: {streams}")
+
+        # 使用 futures_multiplex_socket 订阅所有流
+        multiplex_socket = self.bsm.futures_multiplex_socket(streams)
+        task = asyncio.create_task(
+            self._handle_multiplex_socket(multiplex_socket, "futures_multiplex")
+        )
+        self._tasks = [task]
+
+    async def _handle_multiplex_socket(self, socket_context, stream_name: str):
+        """
+        处理 multiplex WebSocket 连接，支持断线重连。
+
+        Args:
+            socket_context: BinanceSocketManager 返回的 socket 上下文管理器。
+            stream_name: 流的名称，用于日志记录。
+        """
+        reconnect_attempts = 0
+
+        while self._is_running:
+            try:
+                async with socket_context as stream:
+                    logger.success(f"Connected to {stream_name} stream")
+                    reconnect_attempts = 0  # 连接成功后重置重连计数
+
+                    while self._is_running:
+                        try:
+                            msg = await stream.recv()
+                            # 根据消息中的 stream 字段路由到对应的处理器
+                            stream_type = msg.get("stream", "")
+                            data = msg.get("data", {})
+
+                            if "@aggTrade" in stream_type:
+                                await self._process_aggTrade_message(data)
+                            elif "@depth" in stream_type:
+                                await self._process_depth_message(data)
+                            else:
+                                logger.warning(f"Unknown stream type: {stream_type}")
+
+                        except asyncio.CancelledError:
+                            logger.info(f"Socket handler for {stream_name} cancelled.")
+                            raise
+                        except Exception as e:
+                            logger.error(f"Error processing message from {stream_name}: {e}")
+                            # WebSocket 连接错误，跳出内层循环以触发重连
+                            break
+
+            except asyncio.CancelledError:
+                logger.info(f"{stream_name} handler cancelled, exiting.")
+                break
+            except Exception as e:
+                if not self._is_running:
+                    break
+
+                reconnect_attempts += 1
+                logger.error(f"Connection to {stream_name} lost: {e}")
+
+                if reconnect_attempts > MAX_RECONNECT_ATTEMPTS:
+                    logger.error(f"Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached for {stream_name}. Giving up.")
+                    break
+
+                # 指数退避重连
+                delay = min(RECONNECT_DELAY * (2 ** (reconnect_attempts - 1)), MAX_RECONNECT_DELAY)
+                logger.warning(f"Reconnecting to {stream_name} in {delay} seconds... (attempt {reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})")
+                await asyncio.sleep(delay)
 
     async def _handle_socket(self, socket_context, message_handler, stream_name: str):
         """
