@@ -2,18 +2,23 @@
 # -*- coding: utf-8 -*-
 
 import asyncio
-from typing import List
+from typing import List, Optional
 
-from unicorn_binance_websocket_api.manager import BinanceWebSocketApiManager
+from binance import AsyncClient, BinanceSocketManager
 
 from communication.zmq_manager import ZMQManager
 from config.settings import BINANCE_USD_M_FUTURES_CONFIG, ZMQ_CONFIG
 from utils.logger import logger
 
+# 重连配置
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_DELAY = 5  # 秒
+MAX_RECONNECT_DELAY = 60  # 最大重连延迟
+
 
 class BinanceUSDMarginFetcher:
     """
-    使用 asyncio 和 unicorn-binance-websocket-api 从币安USD-M合约市场获取实时数据，
+    使用 asyncio 和 Binance 官方 python-binance 库从币安USD-M合约市场获取实时数据,
     并通过 ZeroMQ 进行发布。
     """
 
@@ -34,69 +39,133 @@ class BinanceUSDMarginFetcher:
             ZMQ_CONFIG["MARKET_DATA_PUBLISHER_ADDRESS"]
         )
 
-        self.ubwa = BinanceWebSocketApiManager(
-            exchange="binance.com-futures",
-            output_default="dict",  # 直接输出字典，无需手动json.loads
-            enable_stream_signal_buffer=True,  # 启用信号缓冲
-            process_stream_signals=self._receive_stream_signal,
-        )
+        self.client: Optional[AsyncClient] = None
+        self.bsm: Optional[BinanceSocketManager] = None
         self._is_running = False
+        self._tasks = []
         logger.info("BinanceUSDMarginFetcher initialized.")
 
-    async def _process_stream_data(self, stream_id: int) -> None:
+    async def _process_aggTrade_message(self, msg: dict):
         """
-        异步处理从WebSocket队列中接收到的数据。
-        这是一个回调函数，由 `create_stream` 的 `process_asyncio_queue` 参数指定。
+        处理聚合交易数据消息。
 
         Args:
-            stream_id: 数据流的ID。
+            msg: WebSocket 接收到的消息。
         """
-        stream_label = self.ubwa.get_stream_label(stream_id)
-        logger.info(f"Starting data processing for stream: {stream_label}")
-        while self._is_running and not self.ubwa.is_stop_request(stream_id):
-            try:
-                data = await self.ubwa.get_stream_data_from_asyncio_queue(stream_id)
+        try:
+            if msg.get("e") == "error":
+                logger.error(f"WebSocket error: {msg}")
+                return
 
-                event_type = data.get("data", {}).get("e")
-                if not event_type:
-                    logger.warning(f"Event type not found in stream data: {data}")
-                    continue
-
-                symbol = data.get("data", {}).get("s", "").lower()
-                if not symbol:
-                    logger.warning(f"Symbol not found in stream data: {data}")
-                    continue
-
-                if event_type == "aggTrade":
+            event_type = msg.get("e")
+            if event_type == "aggTrade":
+                symbol = msg.get("s", "").lower()
+                if symbol:
                     topic = f"{self.trade_topic}.{symbol}"
+                    # 包装成与原格式兼容的结构
+                    data = {"data": msg}
                     self.zmq_manager.publish_message(self.publisher, topic, data)
-                elif event_type == "depthUpdate":
+        except Exception as e:
+            logger.error(f"Error processing aggTrade message: {e}", exc_info=True)
+
+    async def _process_depth_message(self, msg: dict):
+        """
+        处理深度更新数据消息。
+
+        Args:
+            msg: WebSocket 接收到的消息。
+        """
+        try:
+            if msg.get("e") == "error":
+                logger.error(f"WebSocket error: {msg}")
+                return
+
+            event_type = msg.get("e")
+            if event_type == "depthUpdate":
+                symbol = msg.get("s", "").lower()
+                if symbol:
                     topic = f"{self.depth_topic}.{symbol}"
+                    # 包装成与原格式兼容的结构
+                    data = {"data": msg}
                     self.zmq_manager.publish_message(self.publisher, topic, data)
+        except Exception as e:
+            logger.error(f"Error processing depth message: {e}", exc_info=True)
+
+    async def _subscribe_streams(self):
+        """
+        订阅所有配置的交易对和频道。
+        """
+        tasks = []
+
+        # 根据配置的 channels 订阅相应的流
+        for symbol in self.symbols:
+            symbol_lower = symbol.lower()
+
+            for channel in self.channels:
+                if channel == "aggTrade":
+                    # 订阅聚合交易流
+                    logger.info(f"Subscribing to aggTrade stream for {symbol}")
+                    ts = self.bsm.aggtrade_futures_socket(symbol_lower)
+                    stream_name = f"{symbol}/aggTrade"
+                    task = asyncio.create_task(self._handle_socket(ts, self._process_aggTrade_message, stream_name))
+                    tasks.append(task)
+                elif channel.startswith("depth"):
+                    # 订阅深度更新流（支持 depth, depth5, depth10, depth20）
+                    logger.info(f"Subscribing to {channel} stream for {symbol}")
+                    ds = self.bsm.depth_socket(symbol_lower)
+                    stream_name = f"{symbol}/{channel}"
+                    task = asyncio.create_task(self._handle_socket(ds, self._process_depth_message, stream_name))
+                    tasks.append(task)
+
+        self._tasks = tasks
+
+    async def _handle_socket(self, socket_context, message_handler, stream_name: str):
+        """
+        处理单个 WebSocket 连接，支持断线重连。
+
+        Args:
+            socket_context: BinanceSocketManager 返回的 socket 上下文管理器。
+            message_handler: 处理消息的回调函数。
+            stream_name: 流的名称，用于日志记录。
+        """
+        reconnect_attempts = 0
+
+        while self._is_running:
+            try:
+                async with socket_context as stream:
+                    logger.success(f"Connected to {stream_name} stream")
+                    reconnect_attempts = 0  # 连接成功后重置重连计数
+
+                    while self._is_running:
+                        try:
+                            msg = await stream.recv()
+                            await message_handler(msg)
+                        except asyncio.CancelledError:
+                            logger.info(f"Socket handler for {stream_name} cancelled.")
+                            raise
+                        except Exception as e:
+                            logger.error(f"Error processing message from {stream_name}: {e}", exc_info=True)
+                            # 消息处理错误，继续接收下一条消息
+                            continue
 
             except asyncio.CancelledError:
-                logger.info(f"Processing task for stream '{stream_label}' cancelled.")
+                logger.info(f"{stream_name} handler cancelled, exiting.")
                 break
             except Exception as e:
-                logger.error(
-                    f"Error processing stream data for '{stream_label}': {e}",
-                    exc_info=True,
-                )
-            finally:
-                # 确认任务完成，以便队列可以移除该项
-                self.ubwa.asyncio_queue_task_done(stream_id)
+                if not self._is_running:
+                    break
 
-    def _receive_stream_signal(
-        self, signal_type=None, stream_id=None, data_record=None, error_msg=None
-    ) -> None:
-        """
-        处理来自 WebSocket 管理器的信号，用于日志记录和监控。
-        """
-        stream_label = self.ubwa.get_stream_label(stream_id=stream_id) or "manager"
-        logger.success(
-            f"Received stream signal for '{stream_label}': "
-            f"Type={signal_type}, Data={data_record}, Error={error_msg}"
-        )
+                reconnect_attempts += 1
+                logger.error(f"Connection to {stream_name} lost: {e}")
+
+                if reconnect_attempts > MAX_RECONNECT_ATTEMPTS:
+                    logger.error(f"Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached for {stream_name}. Giving up.")
+                    break
+
+                # 指数退避重连
+                delay = min(RECONNECT_DELAY * (2 ** (reconnect_attempts - 1)), MAX_RECONNECT_DELAY)
+                logger.warning(f"Reconnecting to {stream_name} in {delay} seconds... (attempt {reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})")
+                await asyncio.sleep(delay)
 
     async def start(self) -> None:
         """
@@ -109,17 +178,18 @@ class BinanceUSDMarginFetcher:
         logger.info("Starting BinanceUSDMarginFetcher...")
         self._is_running = True
 
-        self.ubwa.create_stream(
-            channels=self.channels,
-            markets=self.symbols,
-            process_asyncio_queue=self._process_stream_data,
-            stream_label="usd_m_futures_data",
-            ping_interval=7,  # 设置心跳间隔为7秒
-        )
+        # 初始化 Binance 异步客户端（用于期货）
+        self.client = await AsyncClient.create()
+        self.bsm = BinanceSocketManager(self.client, user_timeout=60)
 
-        # 保持运行并监控状态
-        while self._is_running and not self.ubwa.is_manager_stopping():
-            await asyncio.sleep(1)
+        # 订阅所有流
+        await self._subscribe_streams()
+
+        # 等待所有任务完成
+        try:
+            await asyncio.gather(*self._tasks)
+        except asyncio.CancelledError:
+            logger.info("All socket tasks cancelled.")
 
         logger.info("BinanceUSDMarginFetcher run loop finished.")
 
@@ -130,11 +200,15 @@ class BinanceUSDMarginFetcher:
         logger.info("Stopping Binance USD-M Futures Fetcher...")
         self._is_running = False
 
-        # This gracefully stops all streams and the manager.
-        # The `_process_stream_data` and `start` loops will terminate
-        # because `_is_running` is now False.
-        self.ubwa.stop_manager_with_all_streams()
+        # 取消所有任务
+        for task in self._tasks:
+            task.cancel()
 
-        # Give a moment for the library to clean up its tasks.
-        await asyncio.sleep(2)
+        # 等待所有任务结束
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        # 关闭客户端
+        if self.client:
+            await self.client.close_connection()
+
         logger.success("Binance USD-M Futures Fetcher stopped.")

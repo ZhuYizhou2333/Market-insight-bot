@@ -1,0 +1,10 @@
+[project]
+name = "market-insight-bot"
+version = "0.1.0"
+description = "Market insight bot for analyzing news and market data from Telegram and Binance"
+requires-python = ">=3.12"
+dependencies = [
+    "telethon",
+    "pyzmq",
+    "python-binance",
+]
