@@ -1,1 +1,0 @@
-# Price action data fetcher
